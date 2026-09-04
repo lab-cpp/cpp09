@@ -1,0 +1,32 @@
+---
+BasedOnStyle: LLVM
+Language: Cpp
+
+# Indentation
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4     # access modifiers (public/private) flush with class
+
+# Line length (42 evaluators like compact code)
+ColumnLimit: 100
+
+# Braces
+BreakBeforeBraces: Attach    # opening brace on its own line (42-style)
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+
+# Pointers & references
+PointerAlignment: Left       # int* ptr, not int *ptr
+
+# Includes
+IncludeBlocks: Regroup
+SortIncludes: CaseSensitive
+
+# Trailing whitespace / blank lines
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+
+# Comments
+ReflowComments: false        # don't reformat existing comment blocks

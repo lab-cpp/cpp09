@@ -1,0 +1,31 @@
+# ── Compiled objects & binaries ──────────────────────────────────────────────
+*.o
+*.out
+*.a
+*.so
+*.d
+*.pdf
+
+# Binary outputs (match common 42 exercise names)
+# Add your binary names here if needed
+# phonebook
+# megaphone
+
+# ── Build artefacts ───────────────────────────────────────────────────────────
+build/
+dist/
+
+# ── Editor/IDE files ──────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ── Temporary / log files ─────────────────────────────────────────────────────
+*.log
+*.tmp
+
+# ── Test files ────────────────────────────────────────────────────────────────
+test.sh

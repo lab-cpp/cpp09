@@ -1,0 +1,268 @@
+name: 42 C++ Module CI
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+
+# Cancel in-progress runs on same branch to save minutes
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 1: Detect which exercises exist so we can build a dynamic matrix
+  # ──────────────────────────────────────────────────────────────────────────
+  discover:
+    name: Discover Exercises
+    runs-on: ubuntu-latest
+    outputs:
+      exercises: ${{ steps.scan.outputs.exercises }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan exercise directories
+        id: scan
+        run: |
+          # Collect all ex* directories that contain a Makefile
+          dirs=()
+          for d in ex*/; do
+            if [ -d "$d" ] && [ -f "${d}Makefile" ]; then
+              dirs+=("${d%/}")
+            fi
+          done
+
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "⚠️  No exercise directories found (ex00, ex01, …)."
+            echo "exercises=[]" >> "$GITHUB_OUTPUT"
+          else
+            # Build a JSON array: ["ex00","ex01",...]
+            json=$(printf '%s\n' "${dirs[@]}" | jq -R . | jq -cs .)
+            echo "exercises=$json" >> "$GITHUB_OUTPUT"
+            echo "Found exercises: $json"
+          fi
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 2: Compile – one job per exercise (parallel matrix)
+  # ──────────────────────────────────────────────────────────────────────────
+  compile:
+    name: "Compile ${{ matrix.exercise }}"
+    needs: discover
+    if: needs.discover.outputs.exercises != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false          # Keep building other exercises even if one fails
+      matrix:
+        exercise: ${{ fromJson(needs.discover.outputs.exercises) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang valgrind
+
+      - name: "Build ${{ matrix.exercise }}"
+        working-directory: ${{ matrix.exercise }}
+        run: |
+          echo "::group::make output"
+          make 2>&1
+          echo "::endgroup::"
+
+      - name: Verify binary was produced
+        working-directory: ${{ matrix.exercise }}
+        run: |
+          # Check that at least one executable exists after build
+          bins=$(find . -maxdepth 1 -type f -executable ! -name "*.sh" | head -5)
+          if [ -z "$bins" ]; then
+            echo "::error::No executable produced in ${{ matrix.exercise }}"
+            exit 1
+          fi
+          echo "✅ Binaries found: $bins"
+
+      # Upload compiled exercise so the test job can use it
+      - name: Upload compiled artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-${{ matrix.exercise }}
+          path: ${{ matrix.exercise }}/
+          retention-days: 1
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 3: Test – run test.sh for each exercise (if it exists)
+  # ──────────────────────────────────────────────────────────────────────────
+  test:
+    name: "Test ${{ matrix.exercise }}"
+    needs: [discover, compile]
+    if: needs.discover.outputs.exercises != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        exercise: ${{ fromJson(needs.discover.outputs.exercises) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install runtime tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends valgrind
+
+      - name: Download compiled artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: compiled-${{ matrix.exercise }}
+          path: ${{ matrix.exercise }}/
+
+      - name: Restore executable permissions
+        working-directory: ${{ matrix.exercise }}
+        run: |
+          find . -maxdepth 1 -name "*.sh" -exec chmod +x {} \;
+          find . -maxdepth 1 -type f -executable -exec chmod +x {} \; 2>/dev/null || true
+
+      - name: "Run tests for ${{ matrix.exercise }}"
+        working-directory: ${{ matrix.exercise }}
+        run: |
+          if [ -f "test.sh" ]; then
+            echo "::group::test.sh output"
+            ./test.sh
+            status=$?
+            echo "::endgroup::"
+            if [ $status -ne 0 ]; then
+              echo "::error::Tests FAILED in ${{ matrix.exercise }} (exit code $status)"
+              exit 1
+            fi
+            echo "✅ All tests passed in ${{ matrix.exercise }}"
+          else
+            echo "::warning::No test.sh found in ${{ matrix.exercise }} – skipping functional tests."
+          fi
+
+      - name: "Valgrind memory check – ${{ matrix.exercise }}"
+        working-directory: ${{ matrix.exercise }}
+        run: |
+          # Find the first executable to check
+          bin=$(find . -maxdepth 1 -type f -executable ! -name "*.sh" | head -1)
+          if [ -z "$bin" ]; then
+            echo "::warning::No binary found for valgrind check in ${{ matrix.exercise }}"
+            exit 0
+          fi
+          echo "Running valgrind on: $bin"
+          # Run with no args; this is a smoke test – failure means leaks in default run
+          valgrind \
+            --leak-check=full \
+            --error-exitcode=1 \
+            --quiet \
+            $bin < /dev/null 2>&1 || {
+            echo "::warning::Valgrind reported issues in ${{ matrix.exercise }} (check summary)"
+          }
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 4: Format check – clang-format (non-blocking warning)
+  # ──────────────────────────────────────────────────────────────────────────
+  format:
+    name: Code Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang-format
+
+      - name: Check formatting
+        run: |
+          unformatted=()
+          while IFS= read -r -d '' file; do
+            if ! clang-format --dry-run --Werror "$file" 2>/dev/null; then
+              unformatted+=("$file")
+            fi
+          done < <(find . -name "*.cpp" -o -name "*.hpp" | grep -v ".git" | tr '\n' '\0')
+
+          if [ ${#unformatted[@]} -gt 0 ]; then
+            echo "::warning::The following files are not formatted per .clang-format:"
+            printf '  - %s\n' "${unformatted[@]}"
+            echo ""
+            echo "Run: clang-format -i <file> to auto-fix."
+            # Not failing the build – format is advisory
+          else
+            echo "✅ All files pass clang-format check."
+          fi
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 5: 42 Norm compliance check (strict flags + no forbidden keywords)
+  # ──────────────────────────────────────────────────────────────────────────
+  norm:
+    name: 42 Norm Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install compiler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang
+
+      - name: Check for forbidden keywords
+        run: |
+          failed=false
+          forbidden=("using namespace" "friend " "printf(" "malloc(" "free(" "realloc(" "calloc(")
+
+          while IFS= read -r -d '' file; do
+            for kw in "${forbidden[@]}"; do
+              if grep -qF "$kw" "$file"; then
+                echo "::error file=$file::Forbidden keyword found: '$kw'"
+                failed=true
+              fi
+            done
+          done < <(find . -name "*.cpp" -o -name "*.hpp" | grep -v ".git" | tr '\n' '\0')
+
+          if $failed; then
+            exit 1
+          fi
+          echo "✅ No forbidden keywords found."
+
+      - name: Verify 42 compile flags compile cleanly
+        run: |
+          failed=false
+          while IFS= read -r file; do
+            if ! clang++ -Wall -Wextra -Werror -std=c++98 -fsyntax-only "$file" 2>/dev/null; then
+              echo "::error file=$file::Syntax error or warning under 42 flags (-Wall -Wextra -Werror -std=c++98)"
+              failed=true
+            fi
+          done < <(find . -name "*.cpp" | grep -v ".git")
+
+          if $failed; then
+            exit 1
+          fi
+          echo "✅ All .cpp files pass 42 strict flags."
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 6: Final gate – all jobs must pass for the merge to be allowed
+  # ──────────────────────────────────────────────────────────────────────────
+  ci-gate:
+    name: CI Gate (All Checks)
+    needs: [compile, test, norm]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate results
+        run: |
+          compile="${{ needs.compile.result }}"
+          test="${{ needs.test.result }}"
+          norm="${{ needs.norm.result }}"
+
+          echo "compile : $compile"
+          echo "test    : $test"
+          echo "norm    : $norm"
+
+          if [[ "$compile" == "failure" || "$test" == "failure" || "$norm" == "failure" ]]; then
+            echo "::error::One or more required checks failed. Merge blocked."
+            exit 1
+          fi
+          echo "✅ All required checks passed – ready to merge."
