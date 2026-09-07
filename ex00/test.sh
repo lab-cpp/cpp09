@@ -1,24 +1,17 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────────────────
 # test.sh – Functional tests for ex00
-#
-# Convention:
-#   run_test "expected_output" [args_to_program...]
-#   Each test prints [OK] or [KO] and records pass/fail counts.
 # ─────────────────────────────────────────────────────────────────────────────
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
-YELLOW='\033[0;33m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-BINARY="./program"    # Must match NAME in Makefile
+BINARY="./btc"
 
 PASS=0
 FAIL=0
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 assert_eq() {
     local description="$1"
@@ -30,45 +23,12 @@ assert_eq() {
         PASS=$((PASS + 1))
     else
         echo -e "${RED}[KO]${NC} $description"
-        echo -e "   ${BOLD}Expected:${NC} $expected"
-        echo -e "   ${BOLD}Got:     ${NC} $actual"
+        echo -e "   ${BOLD}Expected:${NC}\n$expected"
+        echo -e "   ${BOLD}Got:     ${NC}\n$actual"
         FAIL=$((FAIL + 1))
     fi
 }
 
-assert_contains() {
-    local description="$1"
-    local needle="$2"
-    local haystack="$3"
-
-    if echo "$haystack" | grep -qF "$needle"; then
-        echo -e "${GREEN}[OK]${NC} $description"
-        PASS=$((PASS + 1))
-    else
-        echo -e "${RED}[KO]${NC} $description"
-        echo -e "   ${BOLD}Expected to contain:${NC} $needle"
-        echo -e "   ${BOLD}Got:${NC} $haystack"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
-assert_exit_code() {
-    local description="$1"
-    local expected_code="$2"
-    local actual_code="$3"
-
-    if [ "$actual_code" -eq "$expected_code" ]; then
-        echo -e "${GREEN}[OK]${NC} $description (exit $actual_code)"
-        PASS=$((PASS + 1))
-    else
-        echo -e "${RED}[KO]${NC} $description"
-        echo -e "   ${BOLD}Expected exit code:${NC} $expected_code"
-        echo -e "   ${BOLD}Got:${NC} $actual_code"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
-# ── Build ─────────────────────────────────────────────────────────────────────
 echo -e "\n${BOLD}══════════════════════════════════════════${NC}"
 echo -e "${BOLD}  Testing ex00${NC}"
 echo -e "${BOLD}══════════════════════════════════════════${NC}\n"
@@ -79,19 +39,20 @@ if [ ! -f "$BINARY" ]; then
     exit 1
 fi
 
-# ── Tests ─────────────────────────────────────────────────────────────────────
+EXPECTED_OUTPUT="2011-01-03 => 3 = 0.9
+2011-01-03 => 2 = 0.6
+2011-01-03 => 1 = 0.3
+2011-01-03 => 1.2 = 0.36
+2011-01-09 => 1 = 0.32
+Error: not a positive number.
+Error: bad input => 2001-42-42
+2012-01-11 => 1 = 7.1
+Error: too large a number."
 
-# TODO: Replace these examples with your actual test cases
+ACTUAL=$($BINARY input.txt 2>&1)
 
-# Example 1: check output
-ACTUAL=$($BINARY)
-assert_eq "No args outputs Hello 42!" "Hello, 42!" "$ACTUAL"
+assert_eq "BTC matches exact output from the subject examples" "$EXPECTED_OUTPUT" "$ACTUAL"
 
-# Example 2: check exit code
-$BINARY > /dev/null 2>&1
-assert_exit_code "Program exits with code 0" 0 $?
-
-# ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}══════════════════════════════════════════${NC}"
 TOTAL=$((PASS + FAIL))
